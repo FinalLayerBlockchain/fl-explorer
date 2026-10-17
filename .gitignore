@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+index.db*
+*.bak*
+.env

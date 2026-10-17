@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Final Layer Wallet</title>
+  <meta name="description" content="Final Layer web wallet: a non-custodial, post-quantum (ML-DSA-87) wallet that runs entirely in your browser.">
+  <link rel="icon" href="../coin.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css?v=20">
+  <link rel="stylesheet" href="wallet.css?v=3">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap nav">
+      <a class="brand" href="/#/"><img src="../coin.png" alt=""><span>Final Layer</span><em>Wallet</em></a>
+      <nav id="menu">
+        <a href="/#/">Explorer</a>
+        <a href="/#/txs">Transactions</a>
+        <a href="/#/validators">Validators &amp; Staking</a>
+        <a href="/#/security">Quantum Security</a>
+        <a href="/wallet/" class="on">Wallet</a>
+      </nav>
+      <button class="burger" id="burger" aria-label="Menu">&#9776;</button>
+    </div>
+  </header>
+
+  <main class="wrap wallet-page">
+    <div class="wallet-grid">
+      <div class="wallet card">
+
+  <section id="screen-welcome" class="hidden">
+    <h2>Welcome</h2>
+    <p class="sub">A non-custodial, post-quantum wallet. Your keys are created and stored only on this device. Nobody else, including us, can access them.</p>
+    <button id="btn-goCreate">Create a new wallet</button>
+    <button id="btn-goRestore" class="ghost">I have a recovery phrase</button>
+    <button id="btn-goImport" class="ghost">Import a private key</button>
+    <div id="prev-list"></div>
+  </section>
+
+  <section id="screen-import" class="hidden">
+    <h2>Import a private key</h2>
+    <p class="sub">Paste an ML-DSA-87 private key: the 64-character hex seed, or a whole key file (JSON) from the command-line wallet. The address is rebuilt from it.</p>
+    <label>Private key (hex)</label>
+    <textarea id="import-key" placeholder="0x... seed or { key file }"></textarea>
+    <label id="import-pw-label">New password</label>
+    <input id="import-pw" type="password">
+    <button id="btn-import">Import</button>
+    <div id="import-msg" class="msg err"></div>
+    <div class="link" id="link-importBack">Back</div>
+  </section>
+
+  <section id="screen-create" class="hidden">
+    <h2>Create a password</h2>
+    <p class="sub">This password encrypts your wallet on this device. It cannot be recovered if lost.</p>
+    <label>Password</label>
+    <input id="create-pw" type="password" placeholder="At least 8 characters">
+    <label>Confirm password</label>
+    <input id="create-pw2" type="password">
+    <button id="btn-create">Create wallet</button>
+    <div id="create-msg" class="msg err"></div>
+    <div class="link" id="link-createBack">Back</div>
+  </section>
+
+  <section id="screen-backup" class="hidden">
+    <h2>Back up your recovery phrase</h2>
+    <p class="sub">Write these 24 words down and keep them offline. Anyone with them controls this account. This is the only way to recover it.</p>
+    <div class="seed" id="backup-seed"></div>
+    <button id="btn-backupDone">I have saved it</button>
+  </section>
+
+  <section id="screen-restore" class="hidden">
+    <h2>Restore wallet</h2>
+    <label>Recovery phrase (24 words)</label>
+    <textarea id="restore-seed" placeholder="word1 word2 word3 ..."></textarea>
+    <label id="restore-pw-label">New password</label>
+    <input id="restore-pw" type="password">
+    <button id="btn-restore">Restore</button>
+    <div id="restore-msg" class="msg err"></div>
+    <div class="link" id="link-restoreBack">Back</div>
+  </section>
+
+  <section id="screen-unlock" class="hidden">
+    <h2>Unlock</h2>
+    <label>Password</label>
+    <input id="unlock-pw" type="password">
+    <button id="btn-unlock">Unlock</button>
+    <div id="unlock-msg" class="msg err"></div>
+    <div id="unlock-saved"></div>
+    <div class="link" id="link-otherWallet">Create or restore a different wallet</div>
+  </section>
+  <section id="screen-export" class="hidden">
+    <h2>Export private key</h2>
+    <p class="sub" id="export-sub">Your ML-DSA-87 private key controls this account. Anyone who sees it can take your funds. Only reveal it somewhere private.</p>
+    <input id="export-pw" type="password" placeholder="Password" autocomplete="off">
+    <button id="btn-export">Reveal private key</button>
+    <div class="seed hidden" id="export-key" style="margin-top:12px;word-break:break-all"></div>
+    <button id="btn-exportCopy" class="ghost hidden">Copy private key</button>
+    <div class="link hidden" id="btn-exportFile" style="margin-top:4px">Copy key file (for the command-line wallet)</div>
+    <div id="export-msg" class="msg err"></div>
+    <div class="link" id="link-exportBack">Back</div>
+  </section>
+
+  <section id="screen-reset" class="hidden">
+    <h2>Use a different wallet</h2>
+    <p class="sub">This takes you to wallet setup so you can create a new wallet or restore another one. Your current wallet is not deleted: it is added to your saved wallets (still encrypted with its own password) and you can switch back to it at any time from the unlock or welcome screen. Nothing is ever overwritten.</p>
+    <button id="btn-resetGo">Continue to wallet setup</button>
+    <div class="link" id="link-resetBack">Back</div>
+  </section>
+
+
+  <section id="screen-main" class="hidden">
+    <div class="acctbar">
+      <select id="acct-select"></select>
+      <span class="link" id="link-expand" title="Open in a full window">Expand</span>
+      <span class="link" id="link-lock">Lock</span>
+    </div>
+    <div class="card">
+      <div class="bal"><span id="main-bal">0</span> <span>FL</span></div>
+      <div class="addr" id="main-addr"></div>
+      <div class="link" id="link-copy" style="text-align:left;margin-top:6px">Copy address</div>
+    </div>
+    <div class="res">
+      <div class="res-item"><div class="res-n" id="res-band">-</div><div class="res-l">Network fee per transfer (FL)</div></div>
+      <div class="res-item"><div class="res-n" id="res-energy">-</div><div class="res-l">Transactions sent</div></div>
+    </div>
+    <div class="row">
+      <button id="btn-goSend">Send</button>
+      <button id="btn-addAcct" class="ghost">Add account</button>
+    </div>
+    <div class="row">
+      <button id="btn-addRestore" class="ghost">Recover from phrase</button>
+      <button id="btn-addImport" class="ghost">Import private key</button>
+    </div>
+    <div id="tokens-list"></div>
+    <div class="row2">
+      <button id="btn-goTokens" class="ghost">Tokens</button>
+      <button id="btn-goActivity" class="ghost">Activity</button>
+      <button id="btn-goSettings" class="ghost">Settings</button>
+      <button id="btn-refresh" class="ghost">Refresh</button>
+    </div>
+  </section>
+
+  <section id="screen-activity" class="hidden">
+    <h2>Activity</h2>
+    <div id="hist-list"></div>
+    <div class="link" id="link-activityBack">Back</div>
+  </section>
+
+  <section id="screen-settings" class="hidden">
+    <h2>Settings</h2>
+    <div class="setting">
+      <div>
+        <div class="s-title">Stay unlocked</div>
+        <div class="s-sub">Do not ask for the password each time you open the wallet. Clears when the browser closes or you lock. Less secure.</div>
+      </div>
+      <input type="checkbox" id="set-autolock">
+    </div>
+    <button id="btn-goReveal" class="ghost">Show backup</button>
+    <button id="btn-goExport" class="ghost">Export private key</button>
+    <button id="btn-setPin" class="ghost">Set or change PIN</button>
+    <button id="btn-removeAcct" class="danger">Remove this account</button>
+    <div class="link" id="link-settingsBack">Back</div>
+  </section>
+
+  <section id="screen-connections" class="hidden">
+    <h2>Connected sites</h2>
+    <p class="sub">Sites you have connected to. Removing a site revokes its access to your address; it must ask to connect again.</p>
+    <div id="conn-list"></div>
+    <div class="link" id="link-connectionsBack">Back</div>
+  </section>
+
+  <section id="screen-tokens" class="hidden">
+    <h2>Tokens</h2>
+    <div id="tokens-full"></div>
+    <button id="btn-importToken">Import a token</button>
+    <div class="link" id="link-tokensBack">Back</div>
+  </section>
+
+  <section id="screen-tokenImport" class="hidden">
+    <h2>Import a token</h2>
+    <p class="sub">Paste an ERC-20 token's contract address. The name, symbol, and decimals are read from the chain.</p>
+    <label>Token contract address</label>
+    <input id="tk-addr" placeholder="0x...">
+    <button id="btn-tokenAdd">Add token</button>
+    <div id="tk-msg" class="msg err"></div>
+    <div class="link" id="link-tokenImportBack">Back</div>
+  </section>
+
+  <section id="screen-tokenSend" class="hidden">
+    <h2 id="tksend-title">Send token</h2>
+    <div class="card"><div class="bal"><span id="tksend-bal">0</span> <span id="tksend-sym"></span></div></div>
+    <label>Recipient address</label>
+    <input id="tksend-to" placeholder="0x...">
+    <label>Amount</label>
+    <input id="tksend-amt" type="text" inputmode="decimal" placeholder="0.0">
+    <input id="tksend-fee" type="hidden" value="0">
+    <div id="tksend-pin-wrap" class="hidden"><label>PIN</label><input id="tksend-pin" type="password" inputmode="numeric" autocomplete="off"></div>
+    <button id="btn-tokenSend">Send</button>
+    <div id="tksend-msg" class="msg"></div>
+    <div class="link" id="link-tokenSendBack">Back</div>
+  </section>
+
+  <section id="screen-send" class="hidden">
+    <h2>Send FL</h2>
+    <label>Recipient address</label>
+    <input id="send-to" placeholder="0x...">
+    <label>Amount (FL)</label>
+    <input id="send-amt" type="text" inputmode="decimal" placeholder="0.0">
+    <div id="send-pin-wrap" class="hidden">
+      <label>PIN</label>
+      <input id="send-pin" type="password" inputmode="numeric" autocomplete="off">
+    </div>
+    <div id="send-detail" class="sub" style="margin-top:8px"></div>
+    <button id="btn-send">Send</button>
+    <div id="send-msg" class="msg"></div>
+    <div class="link" id="link-sendBack">Back</div>
+  </section>
+
+  <section id="screen-reveal" class="hidden">
+    <h2 id="reveal-title">Show backup</h2>
+    <p class="sub" id="reveal-sub">Enter your password to reveal your backup.</p>
+    <input id="reveal-pw" type="password" placeholder="Password" autocomplete="off">
+    <button id="btn-reveal">Reveal</button>
+    <div class="seed hidden" id="reveal-seed" style="margin-top:12px"></div>
+    <button id="btn-revealCopy" class="ghost hidden">Copy to clipboard</button>
+    <div id="reveal-msg" class="msg err"></div>
+    <div class="link" id="link-revealBack">Back</div>
+  </section>
+
+  <section id="screen-pin" class="hidden">
+    <h2>PIN</h2>
+    <p class="sub">A short PIN required to send and to view your backup. It is not stored, only used to check. Leave both fields blank and save to remove the PIN.</p>
+    <label>PIN</label>
+    <input id="pin-1" type="password" inputmode="numeric" autocomplete="off">
+    <label>Confirm PIN</label>
+    <input id="pin-2" type="password" inputmode="numeric" autocomplete="off">
+    <button id="btn-savePin">Save</button>
+    <div id="pin-msg" class="msg err"></div>
+    <div class="link" id="link-pinBack">Back</div>
+  </section>
+
+      </div>
+      <aside class="wallet-info card">
+        <h3>About this wallet</h3>
+        <p>Your keys are created and encrypted in this browser (PBKDF2-SHA512, 600,000 rounds, AES-256-GCM). Nothing secret is ever sent anywhere.</p>
+        <p>Every transaction is signed with <b>ML-DSA-87</b> (NIST FIPS 204), the post-quantum signature Final Layer requires. A transfer carries 7.2 KB of public key and signature, which is why the fee is a little higher than on classical chains.</p>
+        <p>Wallets saved here exist only in this browser on this site. Back up your recovery phrase.</p>
+      </aside>
+    </div>
+  </main>
+  <footer class="wrap foot"><span>Final Layer: quantum-secure from block zero.</span></footer>
+  <script>document.getElementById('burger').onclick = () => document.getElementById('menu').classList.toggle('open');</script>
+  <script type="module" src="app.js?v=3"></script>
+</body>
+</html>

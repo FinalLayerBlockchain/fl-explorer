@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Final Layer Explorer</title>
+  <meta name="description" content="Block explorer for Final Layer, the quantum-secure EVM blockchain. Every transaction and block is signed with ML-DSA-87 (NIST FIPS 204).">
+  <link rel="icon" href="coin.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=20">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap nav">
+      <a class="brand" href="#/"><img src="coin.png" alt=""><span>Final Layer</span><em>Explorer</em></a>
+      <nav id="menu">
+        <a href="#/">Home</a>
+        <a href="#/blocks">Blocks</a>
+        <a href="#/txs">Transactions</a>
+        <a href="#/validators">Validators &amp; Staking</a>
+        <a href="#/security">Quantum Security</a>
+        <a href="#/network">Network</a>
+        <a href="/wallet/">Wallet</a>
+      </nav>
+      <button class="burger" id="burger" aria-label="Menu">&#9776;</button>
+    </div>
+    <div class="wrap">
+      <form id="search" class="search" autocomplete="off">
+        <input id="q" placeholder="Search by block number, block hash, transaction hash or address">
+        <button type="submit">Search</button>
+      </form>
+    </div>
+  </header>
+  <main class="wrap" id="app"><div class="loading">Loading...</div></main>
+  <footer class="wrap foot">
+    <span>Final Layer: quantum-secure from block zero. Signatures: ML-DSA-87 (NIST FIPS 204) only.</span>
+    <span id="foot-net"></span>
+  </footer>
+  <script src="app.js?v=22"></script>
+</body>
+</html>
