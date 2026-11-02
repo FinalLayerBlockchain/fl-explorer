@@ -7,9 +7,9 @@
   const short = (h, n = 8) => (h && h.length > 2 * n + 2 ? h.slice(0, n + 2) + '...' + h.slice(-n) : h || '');
   const h2i = (x) => (typeof x === 'string' && x.startsWith('0x') ? parseInt(x, 16) : Number(x || 0));
   const big = (x) => { try { return typeof x === 'string' && x.startsWith('0x') ? BigInt(x) : BigInt(x || 0); } catch (e) { return 0n; } };
-  function fl(wei, dp = 6) {
-    const v = big(wei); const neg = v < 0n; const a = neg ? -v : v;
-    const whole = a / 10n ** 18n; let frac = (a % 10n ** 18n).toString().padStart(18, '0').slice(0, dp).replace(/0+$/, '');
+  function fl(wei, dp = 6, decimals = 18) {
+    const v = big(wei); const neg = v < 0n; const a = neg ? -v : v; const u = 10n ** BigInt(decimals);
+    const whole = a / u; let frac = (a % u).toString().padStart(decimals, '0').slice(0, dp).replace(/0+$/, '');
     return (neg ? '-' : '') + whole.toLocaleString('en-US') + (frac ? '.' + frac : '');
   }
   const ago = (ts) => { const s = Math.max(0, Math.floor(Date.now() / 1000 - ts)); if (s < 60) return s + 's ago'; if (s < 3600) return Math.floor(s / 60) + 'm ago'; if (s < 86400) return Math.floor(s / 3600) + 'h ago'; return Math.floor(s / 86400) + 'd ago'; };
@@ -26,7 +26,7 @@
   function txRows(list, withBlock = true) {
     if (!list.length) return '<p class="muted">No transactions yet.</p>';
     return `<div class="tablewrap"><table class="t"><tr><th>Hash</th><th>Type</th>${withBlock ? '<th>Block</th>' : ''}<th>Age</th><th>From</th><th>To</th><th>Value (FL)</th><th>Status</th></tr>` +
-      list.map((t) => `<tr><td>${tLink(t.hash)}</td><td>${t.system ? '<span class="tag sys">System</span> ' : ''}${esc(t.kind)}</td>${withBlock ? `<td>${bLink(t.block)}</td>` : ''}<td class="muted">${ago(t.ts)}</td><td>${aLink(t.frm)}</td><td>${t.too ? aLink(t.too) : (t.contract ? 'Create ' + aLink(t.contract) : '-')}</td><td class="mono">${fl(t.value, 4)}</td><td>${t.status ? '<span class="ok">Success</span>' : '<span class="bad">Failed</span>'}</td></tr>`).join('') + '</table></div>';
+      list.map((t) => `<tr><td>${tLink(t.hash)}</td><td>${t.system ? '<span class="tag sys">System</span> ' : ''}${t.fee_currency ? '<span class="tag pq" title="Gas paid in a token">Token gas</span> ' : ''}${esc(t.kind)}</td>${withBlock ? `<td>${bLink(t.block)}</td>` : ''}<td class="muted">${ago(t.ts)}</td><td>${aLink(t.frm)}</td><td>${t.too ? aLink(t.too) : (t.contract ? 'Create ' + aLink(t.contract) : '-')}</td><td class="mono">${fl(t.value, 4)}</td><td>${t.status ? '<span class="ok">Success</span>' : '<span class="bad">Failed</span>'}</td></tr>`).join('') + '</table></div>';
   }
   function blockRows(list) {
     return `<div class="tablewrap"><table class="t"><tr><th>Block</th><th>Age</th><th>Validator</th><th>Txs</th><th>Gas used</th><th>Size</th></tr>` +
@@ -98,7 +98,9 @@
         <div>From</div><div>${aLink(t.from)}</div>
         <div>To</div><div>${t.to ? aLink(t.to) : (rc.contractAddress ? 'Contract created ' + aLink(rc.contractAddress) : '-')}</div>
         <div>Value</div><div class="mono">${fl(t.value, 18)} FL</div>
-        <div>Fee</div><div class="mono">${fl(big(rc.gasUsed || '0x0') * big(rc.effectiveGasPrice || t.gasPrice || '0x0'), 18)} FL</div>
+        ${Array.isArray(r.tokenTransfers) && r.tokenTransfers.length ? `<div>Tokens transferred</div><div>${r.tokenTransfers.map((x) => `<div class="mono">${Number.isInteger(x.decimals) && x.decimals >= 0 && x.decimals <= 36 ? fl(x.value, x.decimals, x.decimals) + ' ' + esc(x.symbol || 'tokens') : esc(big(x.value).toString()) + ' raw units'} <span class="muted">(${aLink(x.token)})</span> from ${aLink(x.from)} to ${aLink(x.to)}</div>`).join('')}</div>` : ''}
+        ${r.feeCurrency ? `<div>Fee</div><div class="mono">${r.feeCurrency.fee != null ? fl(r.feeCurrency.fee, r.feeCurrency.decimals, r.feeCurrency.decimals) : '-'} ${esc(r.feeCurrency.symbol || 'tokens')} <span class="muted">(gas paid in ${aLink(r.feeCurrency.address)} instead of FL, worth ${fl(big(rc.gasUsed || '0x0') * big(rc.effectiveGasPrice || t.gasPrice || '0x0'), 18)} FL at the governance rate)</span></div>`
+          : `<div>Fee</div><div class="mono">${fl(big(rc.gasUsed || '0x0') * big(rc.effectiveGasPrice || t.gasPrice || '0x0'), 18)} FL</div>`}
         <div>Gas used / limit</div><div class="mono">${h2i(rc.gasUsed).toLocaleString('en-US')} / ${h2i(t.gas).toLocaleString('en-US')}</div>
         <div>Nonce</div><div>${h2i(t.nonce)}</div>
         <div>Signature</div><div><span class="tag pq">${esc(t.pqAlgorithm || 'ML-DSA-87')}</span> public key ${(pk.length - 2) / 2} B, signature ${(sig.length - 2) / 2} B. The key is checked against the sender's key registry entry (or its default address) by every node.</div>
@@ -152,7 +154,13 @@
   }
 
   async function network() {
-    const s = await get('/stats');
+    const [s, fc] = await Promise.all([get('/stats'), get('/fee-currencies').catch(() => ({ currencies: [] }))]);
+    const rate = (c) => { // tokens per 1 FL = 1e18 * num / den, in token units
+      try { return fl(10n ** 18n * BigInt(c.numerator) / BigInt(c.denominator), 6, c.decimals); } catch (e) { return '-'; }
+    };
+    const fcRows = fc.currencies.length ? `<div class="tablewrap"><table class="t"><tr><th>Token</th><th>Address</th><th>Rate</th><th>Extra gas</th><th>Price source</th><th>Status</th></tr>` +
+      fc.currencies.map((c) => `<tr><td>${esc(c.symbol)} <span class="muted">${esc(c.name)}</span></td><td>${aLink(c.address)}</td><td class="mono">${c.active ? '1 FL = ' + rate(c) + ' ' + esc(c.symbol) : '-'}</td><td class="mono">${c.intrinsicGas ? Number(c.intrinsicGas).toLocaleString('en-US') : '-'}</td><td>${c.oracle ? aLink(c.oracle) : '-'}</td><td>${c.suspended ? '<span class="bad">Suspended</span>' : c.active ? '<span class="ok">Active</span>' : '<span class="warn">No valid price</span>'}</td></tr>`).join('') + '</table></div>'
+      : '<p class="muted">No tokens are listed yet.</p>';
     app.innerHTML = `<div class="card"><h2>Network</h2><div class="kv">
       <div>Network</div><div>Final Layer</div>
       <div>Chain ID</div><div class="mono">${s.chainId} (0x${s.chainId.toString(16)})</div>
@@ -165,7 +173,10 @@
       <div>Explorer API</div><div class="mono">${esc(location.origin)}/api/stats</div>
       <div>Gas price</div><div class="mono">${(s.gasPrice / 1e9).toFixed(3)} gwei</div>
       <div>Staking APR</div><div>${s.staking && s.staking.stakingAprBps != null ? (s.staking.stakingAprBps / 100).toFixed(2) + '%' : '-'}</div>
-    </div></div>`;
+    </div></div>
+    <div class="card"><h3>Pay gas with tokens</h3>
+      <p class="muted">A transaction can pay its gas in a token listed here instead of FL. Gas is priced in FL and charged in the token at the rate below; the unused part is refunded in the same token and the fee goes to the block producer. Listing a token or changing its rate needs a strict staker vote (30% of voting power for, 2/3 of votes yes) or 2/3 of active validators plus a 1-day wait; 2/3 of validators can suspend a token at once (directory ${aLink(fc.directory || '0x0000000000000000000000000000000000005052')}).</p>
+      ${fcRows}</div>`;
   }
 
   async function search(q) {

@@ -30,11 +30,15 @@ MAX_RPC_BODY = 256 * 1024
 MAX_RPC_RESPONSE = 4 * 1024 * 1024
 HEX_HASH = re.compile(r"0x[0-9a-fA-F]{64}\Z")
 HEX_ADDR = re.compile(r"0x[0-9a-fA-F]{40}\Z")
-SCHEMA = "2"
+SCHEMA = "3"
 
 STAKE_HUB = "0x0000000000000000000000000000000000002002"
 VALIDATOR_SET = "0x0000000000000000000000000000000000001000"
 REGISTRY = "0x0000000000000000000000000000000000005051"
+FEE_DIRECTORY = "0x0000000000000000000000000000000000005052"
+FEE_ORACLE = "0x0000000000000000000000000000000000005053"
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+ZERO_WORD = "0x" + "0" * 64
 
 RPC_ALLOW = {
     "eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_getTransactionCount", "eth_getCode",
@@ -44,10 +48,10 @@ RPC_ALLOW = {
 }
 
 
-def rpc(method, params=None):
+def rpc(method, params=None, timeout=20):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}).encode()
     req = urllib.request.Request(RPC, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         res = json.loads(r.read())
     if "error" in res:
         raise RuntimeError(res["error"].get("message", "rpc error"))
@@ -72,7 +76,7 @@ def init_db():
         txs INTEGER, gas_used INTEGER, gas_limit INTEGER, size INTEGER);
     CREATE TABLE IF NOT EXISTS txs(hash TEXT PRIMARY KEY, block INTEGER, idx INTEGER, ts INTEGER,
         frm TEXT, too TEXT, value TEXT, status INTEGER, gas_used INTEGER, kind TEXT, method TEXT,
-        contract TEXT, system INTEGER);
+        contract TEXT, system INTEGER, fee_currency TEXT);
     CREATE INDEX IF NOT EXISTS txs_block ON txs(block DESC, idx);
     CREATE TABLE IF NOT EXISTS addr_tx(addr TEXT, hash TEXT, block INTEGER, idx INTEGER,
         PRIMARY KEY(addr, hash));
@@ -100,6 +104,11 @@ SYSTEM_CONTRACTS = {
     "0x0000000000000000000000000000000000002005": "GovToken",
     "0x0000000000000000000000000000000000002006": "Timelock",
     REGISTRY: "PQ Key Registry",
+}
+# Fee currency contracts (pre-deployed in genesis, not system contracts).
+LABELS = {
+    FEE_DIRECTORY: "Fee Currency Directory",
+    FEE_ORACLE: "Fee Currency Fixed Rate Oracle",
 }
 METHODS = {
     "0xf340fa01": "Deposit block fees", "0x300c3567": "Distribute finality reward",
@@ -154,10 +163,10 @@ def index_block(c, n):
         to = (tx.get("to") or "").lower()
         contract = (rc.get("contractAddress") or "") or ""
         system = 1 if (to in SYSTEM_CONTRACTS and h2i(tx.get("gasPrice", "0x0")) == 0 and frm == b["miner"].lower()) else 0
-        c.execute("INSERT OR REPLACE INTO txs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO txs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (tx["hash"], n, h2i(tx["transactionIndex"]), ts, frm, to, str(h2i(tx["value"])),
                    h2i(rc["status"]), h2i(rc.get("gasUsed", "0x0")), kind, method,
-                   contract.lower(), system))
+                   contract.lower(), system, (tx.get("feeCurrency") or "").lower() or None))
         for a in {frm, to, contract.lower()}:
             if a:
                 c.execute("INSERT OR IGNORE INTO addr_tx VALUES(?,?,?,?)", (a, tx["hash"], n, h2i(tx["transactionIndex"])))
@@ -218,8 +227,8 @@ def indexer():
 
 
 # ---------------------------------------------------------------- API helpers
-def call(to, data, block="latest"):
-    return rpc("eth_call", [{"to": to, "data": data}, block])
+def call(to, data, block="latest", timeout=20):
+    return rpc("eth_call", [{"to": to, "data": data}, block], timeout=timeout)
 
 
 def addr_word(a):
@@ -326,8 +335,113 @@ def api_tx(h):
     c = db()
     row = c.execute("SELECT kind, method, system FROM txs WHERE hash=?", (h,)).fetchone()
     c.close()
-    return {"tx": tx, "receipt": rc, "confirmations": conf, "kind": row["kind"] if row else None,
-            "system": bool(row["system"]) if row else False}
+    out = {"tx": tx, "receipt": rc, "confirmations": conf, "kind": row["kind"] if row else None,
+           "system": bool(row["system"]) if row else False}
+    fc = (tx.get("feeCurrency") or "").lower()
+    miner = ""
+    if fc and HEX_ADDR.match(fc):
+        info = token_info(fc)
+        fee = None
+        if rc and tx.get("blockNumber"):
+            miner = rpc("eth_getBlockByNumber", [tx["blockNumber"], False])["miner"].lower()
+            # the node credits the fee as a Transfer from 0x0 to the block producer
+            for lg in rc.get("logs") or []:
+                t = lg.get("topics") or []
+                if lg.get("address", "").lower() == fc and len(t) == 3 and t[0] == TRANSFER_TOPIC                         and t[1] == ZERO_WORD and "0x" + t[2][-40:].lower() == miner:
+                    fee = str(h2i(lg.get("data") or "0x0"))
+        out["feeCurrency"] = dict(info, address=fc, fee=fee)
+    # ERC-20 Transfer events (3 topics; ERC-721 has 4). The node's fee legs on
+    # the fee token are exactly debit sender->0x0, refund 0x0->sender and fee
+    # 0x0->producer (FeeCurrencyERC20.debitGasFees / creditGasFees); only those
+    # are skipped (shown as the fee instead). Any other mint or burn of the
+    # fee token is a real transfer and stays listed.
+    sender = "0x" + addr_word(tx.get("from") or "") if HEX_ADDR.match(tx.get("from") or "") else None
+    miner_word = "0x" + addr_word(miner) if miner and HEX_ADDR.match(miner) else None
+    transfers = []
+    lookups = 10  # uncached token_info calls per request (3 eth_calls each)
+    for lg in ((rc or {}).get("logs") or [])[:100]:
+        t = lg.get("topics") or []
+        tok = (lg.get("address") or "").lower()
+        data = lg.get("data") or "0x0"
+        if len(t) != 3 or t[0] != TRANSFER_TOPIC or not HEX_ADDR.match(tok)                 or not all(isinstance(w, str) for w in t) or not isinstance(data, str) or len(data) > 66:
+            continue
+        if fc and tok == fc and ((t[1] == sender and t[2] == ZERO_WORD)
+                                 or (t[1] == ZERO_WORD and t[2] in (sender, miner_word))):
+            continue
+        try:
+            value = str(h2i(data))
+        except ValueError:
+            continue
+        info = _token_cache.get(tok)
+        if info is None and lookups > 0:
+            lookups -= 1
+            info = token_info(tok)
+        # decimals None = metadata not fetched (lookup budget spent); UI shows raw units
+        transfers.append({"token": tok, "symbol": info["symbol"] if info else "",
+                          "decimals": info["decimals"] if info else None,
+                          "from": "0x" + t[1][-40:].lower(), "to": "0x" + t[2][-40:].lower(), "value": value})
+    out["tokenTransfers"] = transfers
+    return out
+
+
+_token_cache = {}
+TOKEN_CACHE_MAX = 5000  # any contract that emits a Transfer log gets an entry; bound the growth
+TOKEN_CALL_TIMEOUT = 5  # untrusted contracts: a looping name() must not hold a thread for 20 s
+
+
+def token_info(addr):
+    """name / symbol / decimals of an ERC-20 (cached)."""
+    if addr in _token_cache:
+        return _token_cache[addr]
+
+    def string(sel):
+        try:
+            r = call(addr, sel, timeout=TOKEN_CALL_TIMEOUT)[2:]
+            if len(r) >= 128:
+                n = int(r[64:128], 16)
+                s = bytes.fromhex(r[128:128 + 2 * n]).decode("utf-8", "replace")[:64]
+                # drop control / format chars (bidi overrides, zero-width) that could reorder the row
+                return "".join(ch for ch in s if ch.isprintable())
+        except Exception:
+            pass
+        return ""
+    try:
+        dec = int(call(addr, "0x313ce567", timeout=TOKEN_CALL_TIMEOUT), 16)
+    except Exception:
+        dec = 18
+    info = {"name": string("0x06fdde03"), "symbol": string("0x95d89b41"), "decimals": dec if 0 <= dec <= 36 else 18}
+    if len(_token_cache) >= TOKEN_CACHE_MAX:
+        _token_cache.clear()
+    _token_cache[addr] = info
+    return info
+
+
+def api_fee_currencies():
+    """Tokens governance listed to pay for gas, with their current FL rate."""
+    r = call(FEE_DIRECTORY, "0x61c661de")[2:]
+    out = []
+    if len(r) >= 128:
+        n = min(int(r[64:128], 16), 32)
+        for i in range(n):
+            a = "0x" + r[128 + 64 * i + 24:128 + 64 * (i + 1)]
+            item = dict(token_info(a), address=a)
+            try:
+                c = call(FEE_DIRECTORY, "0xe7295be5" + addr_word(a))[2:]
+                item.update(numerator=str(int(c[0:64], 16)), denominator=str(int(c[64:128], 16)),
+                            intrinsicGas=int(c[128:192], 16), active=True)
+            except Exception:
+                item.update(active=False)
+            try:
+                item["suspended"] = int(call(FEE_DIRECTORY, "0x" + keccak256(b"suspended(address)")[:4].hex() + addr_word(a)), 16) != 0
+            except Exception:
+                item["suspended"] = False
+            try:
+                cfg = call(FEE_DIRECTORY, "0x" + keccak256(b"getCurrencyConfig(address)")[:4].hex() + addr_word(a))[2:]
+                item["oracle"] = "0x" + cfg[24:64]
+            except Exception:
+                pass
+            out.append(item)
+    return {"directory": FEE_DIRECTORY, "currencies": out}
 
 
 def api_account(a):
@@ -349,7 +463,7 @@ def api_account(a):
     return {"address": a, "balance": str(bal), "nonce": nonce, "isContract": code not in ("0x", None),
             "codeSize": (len(code) - 2) // 2 if code else 0, "keyRotated": rotated,
             "registryKeyHash": reg if rotated else None, "txCount": n,
-            "label": SYSTEM_CONTRACTS.get(a)}
+            "label": SYSTEM_CONTRACTS.get(a) or LABELS.get(a)}
 
 
 # keccak256 (pure python, needed for the registry slot)
@@ -546,6 +660,8 @@ class H(BaseHTTPRequestHandler):
                     return self.send_json(api_account(parts[1]))
                 if parts[0] == "validators":
                     return self.send_json(api_validators())
+                if parts[0] == "fee-currencies":
+                    return self.send_json(api_fee_currencies())
                 return self.send_json({"error": "unknown endpoint"}, 404)
             if p == "/wallet" or p.startswith("/wallet/"):
                 self.send_response(301)

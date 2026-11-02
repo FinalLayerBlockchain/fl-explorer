@@ -382,13 +382,33 @@ $('set-autolock').onchange = async (e) => {
   if (store.autolock) suSave(session.password); else suClear();
 };
 
+// "Pay network fee with": FL or a token listed in the fee currency directory.
+const feeCurrencies = {};
+function showFeeDetail(selId, detailId) {
+  const cur = (feeCurrencies[selId] || []).find((c) => c.address === $(selId).value);
+  $(detailId).textContent = 'Network fee ...';
+  const p = cur ? W.transferFeeIn(cur).then((f) => 'Network fee about ' + f.fee + ' ' + cur.symbol + ' for a transfer, paid in ' + cur.symbol + ' instead of FL (' + f.gas.toLocaleString() + ' gas). Signed with ML-DSA-87.')
+    : W.transferFee().then((f) => 'Network fee about ' + f.fee + ' FL (' + f.gas.toLocaleString() + ' gas, most of it pays for the 7.2 KB post-quantum signature). Signed with ML-DSA-87.');
+  p.then((t) => { $(detailId).textContent = t; }).catch(() => { $(detailId).textContent = ''; });
+}
+function loadFeeCurrencies(selId, detailId) {
+  const sel = $(selId);
+  sel.replaceChildren(new Option('FL', ''));
+  feeCurrencies[selId] = [];
+  showFeeDetail(selId, detailId);
+  W.getFeeCurrencies(activeAcct().address).then((list) => {
+    feeCurrencies[selId] = list;
+    for (const c of list) sel.appendChild(new Option(c.symbol + ' (balance ' + W.formatUnits(c.balance || 0n, c.decimals) + ')', c.address));
+  }).catch(() => {});
+  sel.onchange = () => showFeeDetail(selId, detailId);
+}
+
 // send
 $('btn-goSend').onclick = () => {
   if (!activeWallet()) return alert('This account is an old-network key and cannot send on this chain.');
   setMsg('send-msg', ''); $('send-to').value = ''; $('send-amt').value = ''; $('send-pin').value = '';
   $('send-pin-wrap').classList.toggle('hidden', !store.pin);
-  $('send-detail').textContent = 'Network fee ...';
-  W.transferFee().then((f) => { $('send-detail').textContent = 'Network fee about ' + f.fee + ' FL (' + f.gas.toLocaleString() + ' gas, most of it pays for the 7.2 KB post-quantum signature). Signed with ML-DSA-87.'; }).catch(() => { $('send-detail').textContent = ''; });
+  loadFeeCurrencies('send-feecur', 'send-detail');
   show('send');
 };
 $('link-sendBack').onclick = () => show('main');
@@ -399,7 +419,7 @@ $('btn-send').onclick = async () => {
   if (store.pin && !(await W.checkPin($('send-pin').value, store.pin))) return setMsg('send-msg', 'Wrong PIN.');
   $('btn-send').disabled = true; setMsg('send-msg', 'Signing and broadcasting...', true);
   try {
-    const res = await W.send(activeWallet(), to, amt);
+    const res = await W.send(activeWallet(), to, amt, { feeCurrency: $('send-feecur').value || null });
     setMsg('send-msg', 'Sent. Waiting for the block... tx ' + res.hash, true);
     activeAcct().history = activeAcct().history || [];
     activeAcct().history.unshift({ txid: res.hash, to, amount: amt + ' FL', ts: Date.now(), chain: CHAIN_TAG });
@@ -576,6 +596,7 @@ function openTokenSend(token) {
   $('tksend-to').value = ''; $('tksend-amt').value = ''; $('tksend-pin').value = '';
   $('tksend-pin-wrap').classList.toggle('hidden', !store.pin);
   setMsg('tksend-msg', '');
+  loadFeeCurrencies('tksend-feecur', 'tksend-detail');
   const addr = activeAcct().address;
   W.getTokenBalance(token.address, addr).then((raw) => { $('tksend-bal').textContent = W.formatUnits(raw, token.decimals); }).catch(() => {});
   show('tokenSend');
@@ -590,7 +611,7 @@ $('btn-tokenSend').onclick = async () => {
   try { amountRaw = W.parseUnits(amt, t.decimals); } catch (e) { return setMsg('tksend-msg', e.message); }
   $('btn-tokenSend').disabled = true; setMsg('tksend-msg', 'Signing and broadcasting...', true);
   try {
-    const res = await W.sendToken(activeWallet(), t.address, to, amountRaw);
+    const res = await W.sendToken(activeWallet(), t.address, to, amountRaw, { feeCurrency: $('tksend-feecur').value || null });
     setMsg('tksend-msg', 'Sent. Waiting for the block... tx ' + res.hash, true);
     activeAcct().history = activeAcct().history || [];
     activeAcct().history.unshift({ txid: res.hash, to, amount: amt + ' ' + t.symbol, ts: Date.now(), chain: CHAIN_TAG });
